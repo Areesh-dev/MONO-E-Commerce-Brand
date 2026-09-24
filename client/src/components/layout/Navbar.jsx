@@ -1,6 +1,6 @@
 import { useEffect, useState, useRef } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
-import { Search, ShoppingBag, User, Menu, X, Heart } from 'lucide-react';
+import { Search, ShoppingBag, User, LogIn, Heart, Menu, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import Container from '../ui/Container';
 import { brand } from '../../config/brand';
@@ -71,6 +71,7 @@ export default function Navbar() {
 
       <header className="sticky top-0 z-50 bg-ink border-b border-ink-line">
         <Container className="h-16 flex items-center justify-between gap-3 sm:gap-4">
+          {/* Desktop primary nav (lg+) */}
           <nav aria-label="Primary" className="hidden lg:flex items-center gap-8 flex-1">
             {navLinks.map((l) => (
               <PrefetchLink
@@ -86,11 +87,14 @@ export default function Navbar() {
             ))}
           </nav>
 
+          {/* Logo */}
           <div className="flex-1 lg:flex-none flex lg:justify-center">
             <Logo size="md" />
           </div>
 
+          {/* Right cluster */}
           <div className="flex items-center gap-3 sm:gap-4 flex-1 justify-end">
+            {/* Search — always visible */}
             <button
               type="button"
               onClick={() => setSearchOpen((s) => !s)}
@@ -102,18 +106,20 @@ export default function Navbar() {
               <Search className="w-[18px] h-[18px]" strokeWidth={1.5} />
             </button>
 
+            {/* Desktop only: Account */}
             <Link
               to={user ? '/profile' : '/login'}
               aria-label={user ? 'Account' : 'Sign in'}
-              className="text-ink-text hover:text-ink-white hidden sm:block"
+              className="hidden lg:block text-ink-text hover:text-ink-white"
             >
               <User className="w-[18px] h-[18px]" strokeWidth={1.5} />
             </Link>
 
+            {/* Desktop only: Wishlist */}
             <Link
               to="/wishlist"
               aria-label={`Wishlist, ${wishlistCount} item${wishlistCount === 1 ? '' : 's'}`}
-              className="relative text-ink-text hover:text-ink-white"
+              className="hidden lg:block relative text-ink-text hover:text-ink-white"
             >
               <Heart className="w-[18px] h-[18px]" strokeWidth={1.5} />
               {wishlistCount > 0 && (
@@ -126,6 +132,7 @@ export default function Navbar() {
               )}
             </Link>
 
+            {/* Cart — always visible */}
             <Link
               to="/cart"
               aria-label={`Cart, ${cartCount} item${cartCount === 1 ? '' : 's'}`}
@@ -142,6 +149,20 @@ export default function Navbar() {
               )}
             </Link>
 
+            {/* Mobile/Tablet only: Profile (if signed in) or Login (if signed out) */}
+            <Link
+              to={user ? '/profile' : '/login'}
+              aria-label={user ? 'Account' : 'Sign in'}
+              className="lg:hidden text-ink-text hover:text-ink-white"
+            >
+              {user ? (
+                <User className="w-[18px] h-[18px]" strokeWidth={1.5} />
+              ) : (
+                <LogIn className="w-[18px] h-[18px]" strokeWidth={1.5} />
+              )}
+            </Link>
+
+            {/* Mobile/Tablet only: Menu */}
             <button
               type="button"
               onClick={() => setMobileOpen(true)}
@@ -154,6 +175,7 @@ export default function Navbar() {
           </div>
         </Container>
 
+        {/* Site search — expands below the header */}
         <AnimatePresence>
           {searchOpen && (
             <motion.div
@@ -193,6 +215,7 @@ export default function Navbar() {
         </AnimatePresence>
       </header>
 
+      {/* Mobile / Tablet menu */}
       <AnimatePresence>
         {mobileOpen && (
           <motion.div
@@ -200,7 +223,7 @@ export default function Navbar() {
             role="dialog"
             aria-modal="true"
             aria-label="Mobile menu"
-            className="fixed inset-0 z-[80] bg-ink lg:hidden"
+            className="fixed inset-0 z-[80] bg-ink lg:hidden overflow-y-auto"
             initial={{ x: '100%' }}
             animate={{ x: 0 }}
             exit={{ x: '100%' }}
@@ -208,8 +231,12 @@ export default function Navbar() {
           >
             <Container className="h-16 flex items-center justify-between">
               <Logo size="md" />
-              <button onClick={() => setMobileOpen(false)} aria-label="Close menu">
-                <X className="w-5 h-5" />
+              <button
+                onClick={() => setMobileOpen(false)}
+                aria-label="Close menu"
+                className="text-ink-text hover:text-ink-white"
+              >
+                <X className="w-5 h-5" strokeWidth={1.5} />
               </button>
             </Container>
 
@@ -226,6 +253,18 @@ export default function Navbar() {
                   )}
                 </PrefetchLink>
               ))}
+
+              <PrefetchLink
+                to="/wishlist"
+                className="heading-editorial text-4xl text-ink-white inline-flex items-baseline gap-3"
+              >
+                <span>Wishlist</span>
+                {wishlistCount > 0 && (
+                  <span className="text-base uppercase tracking-editorial text-ink-dim tabular-nums">
+                    ({wishlistCount})
+                  </span>
+                )}
+              </PrefetchLink>
 
               <PrefetchLink
                 to={user ? '/profile' : '/login'}
