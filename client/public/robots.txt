@@ -1,0 +1,20 @@
+User-agent: *
+Allow: /
+Allow: /products
+Allow: /products/
+Allow: /categories
+Allow: /categories/
+Allow: /faq
+Allow: /privacy-policy
+Allow: /terms
+
+Disallow: /admin
+Disallow: /admin/
+Disallow: /login
+Disallow: /signup
+Disallow: /profile
+Disallow: /profile/
+Disallow: /cart
+Disallow: /search
+
+Sitemap: https://example.com/sitemap.xml
