@@ -233,30 +233,6 @@ export default function Navbar() {
               >
                 {user ? 'Profile' : 'Login'}
               </PrefetchLink>
-
-              <PrefetchLink
-                to="/wishlist"
-                className="heading-editorial text-4xl text-ink-white"
-              >
-                Wishlist
-                {wishlistCount > 0 && (
-                  <span className="ml-3 align-middle text-base uppercase tracking-editorial text-ink-dim tabular-nums">
-                    {wishlistCount}
-                  </span>
-                )}
-              </PrefetchLink>
-
-              <PrefetchLink
-                to="/cart"
-                className="heading-editorial text-4xl text-ink-white"
-              >
-                Cart
-                {cartCount > 0 && (
-                  <span className="ml-3 align-middle text-base uppercase tracking-editorial text-ink-dim tabular-nums">
-                    {cartCount}
-                  </span>
-                )}
-              </PrefetchLink>
             </nav>
           </motion.div>
         )}
