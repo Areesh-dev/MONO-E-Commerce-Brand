@@ -9,7 +9,6 @@ A full-stack, database-driven e-commerce platform built for a premium streetwear
 ## Table of Contents
 
 - [Overview](#overview)
-- [Screenshots](#screenshots)
 - [Features](#features)
 - [Tech Stack](#tech-stack)
 - [Architecture](#architecture)
@@ -35,20 +34,6 @@ The storefront uses a dark, editorial monochrome aesthetic inspired by premium f
 
 ---
 
-## Screenshots
-
-> Add your screenshots here once deployed. Recommended: homepage, product detail, cart, admin dashboard, AI chatbot.
-
-```
-docs/screenshots/
-├── 01-homepage.png
-├── 02-product-detail.png
-├── 03-cart.png
-├── 04-admin-dashboard.png
-└── 05-ai-chat.png
-```
-
----
 
 ## Features
 
