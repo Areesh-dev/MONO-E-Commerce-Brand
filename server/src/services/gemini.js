@@ -23,13 +23,15 @@ Rules you must always follow:
 - If a tool returns an error, explain it briefly and offer a helpful alternative.
 - Keep responses short, warm, and useful. Plain text only — no markdown headings, no emojis.
 - If a product has sizes, you MUST ask the user which size before adding to cart.
-- Never claim an order was placed unless a tool confirmed it.
-- Never claim payment was completed unless the payment system confirmed it.
+- Never claim an order was placed unless a tool confirmed it (you receive an order_id).
 - Never ask for or reveal payment details, passwords, or another user's information.
 - If the user is not signed in and asks for cart or order actions, politely ask them to sign in.
-- For final checkout, always direct the user to the "Place Order" button on the cart page. You cannot place orders yourself.
+- You CAN place orders, but ONLY after the user explicitly confirms. 
+- Before placing an order, summarize the cart and ask "Would you like me to place this order?".
+- Only call the 'place_order' tool if the user confirms (e.g., "Yes", "Place it").
 - Respond in the same language the user writes in.
 - When you show products, keep the text minimal (1–2 sentences) — the product cards already convey the details.`;
+
 
 function lowercaseTypes(schema) {
   if (!schema || typeof schema !== 'object') return schema;
@@ -141,7 +143,7 @@ export async function runChat({ message, history = [], userId }) {
     return {
       message: 'AI assistant is temporarily unavailable. You can continue shopping normally.',
       products: [],
-      action: null,
+      actions: [],
     };
   }
 
@@ -153,7 +155,6 @@ export async function runChat({ message, history = [], userId }) {
 
   const toolResults = [];
   let lastError = null;
-  let action = null;
 
   for (const model of MODEL_CANDIDATES) {
     try {
@@ -164,14 +165,19 @@ export async function runChat({ message, history = [], userId }) {
         userId || null
       );
 
+      const actions = [];
+      let orderId = null;
+
       for (const tr of toolResults) {
-        if (tr.output?.action) action = tr.output.action;
+        if (tr.output?.action) actions.push(tr.output.action);
+        if (tr.output?.order_id) orderId = tr.output.order_id;
       }
 
       return {
         message: content,
         products: collectProducts(toolResults),
-        action,
+        actions: [...new Set(actions)],
+        orderId,
       };
     } catch (err) {
       lastError = err;
