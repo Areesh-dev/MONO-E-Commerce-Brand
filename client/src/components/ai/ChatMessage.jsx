@@ -1,13 +1,12 @@
 import { Link } from 'react-router-dom';
-import { ArrowRight } from 'lucide-react';
+import { ArrowRight, RotateCcw } from 'lucide-react';
 import { motion, useReducedMotion } from 'framer-motion';
-import { RotateCcw } from 'lucide-react';
 import ProductResultCard from './ProductResultCard';
 import CartSummaryCard from './CartSummaryCard';
 
 export default function ChatMessage({ message, isLatest, busy, onSend, onRetry }) {
   const reduceMotion = useReducedMotion();
-  const { role, content, products, cart, quickReplies, isError } = message;
+  const { role, content, products, cart, quickReplies, isError, orderId } = message;
   const isUser = role === 'user';
 
   const enter = reduceMotion
@@ -30,8 +29,9 @@ export default function ChatMessage({ message, isLatest, busy, onSend, onRetry }
     <motion.div {...enter} className="flex flex-col gap-3">
       {content && (
         <div
-          className={`max-w-[92%] border-l pl-3 text-sm leading-relaxed whitespace-pre-line break-words ${isError ? 'border-ink-muted text-ink-dim' : 'border-ink-white text-ink-text'
-            }`}
+          className={`max-w-[92%] border-l pl-3 text-sm leading-relaxed whitespace-pre-line break-words ${
+            isError ? 'border-ink-muted text-ink-dim' : 'border-ink-white text-ink-text'
+          }`}
         >
           {content}
           {isError && onRetry && (
@@ -68,16 +68,16 @@ export default function ChatMessage({ message, isLatest, busy, onSend, onRetry }
           onRemove={
             isLatest
               ? (item) =>
-                onSend(
-                  `Remove ${item.product_name}${item.size_name ? ` (size ${item.size_name})` : ''} from my bag`,
-                )
+                  onSend(
+                    `Remove ${item.product_name}${item.size_name ? ` (size ${item.size_name})` : ''} from my bag`,
+                  )
               : undefined
           }
         />
       )}
 
       {showChips && (
-        <div role="group" aria-label="Pick a size" className="flex flex-wrap gap-1.5">
+        <div role="group" aria-label="Quick replies" className="flex flex-wrap gap-1.5">
           {quickReplies.map((q) => (
             <button
               key={q.label}
@@ -90,13 +90,14 @@ export default function ChatMessage({ message, isLatest, busy, onSend, onRetry }
           ))}
         </div>
       )}
-      {message.orderId && (
-        <div className="mt-3 pt-3 border-t border-ink-line">
+
+      {orderId && (
+        <div className="mt-3 border-t border-ink-line pt-3">
           <Link
-            to={`/profile/orders/${message.orderId}`}
-            className="inline-flex items-center gap-2 px-4 py-2 bg-ink-white text-ink text-xs font-medium uppercase tracking-nav hover:bg-ink hover:text-ink-white transition-colors"
+            to={`/profile/orders/${orderId}`}
+            className="inline-flex items-center gap-2 bg-ink-white px-4 py-2 text-xs font-medium uppercase tracking-nav text-ink transition-colors hover:bg-ink hover:text-ink-white"
           >
-            View Order <ArrowRight className="w-3 h-3" />
+            View Order <ArrowRight className="h-3 w-3" />
           </Link>
         </div>
       )}
