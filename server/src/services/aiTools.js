@@ -5,6 +5,7 @@ const PRODUCT_FIELDS =
   'id,name,slug,price,image_url,is_popular,stock,category:categories(id,name,slug)';
 const MAX_QTY_PER_LINE = 10;
 const SEARCH_LIMIT = 8;
+const ORDER_RPC_TIMEOUT_MS = 12000;
 
 const STOP_WORDS = new Set([
   'the', 'a', 'an', 'for', 'and', 'with', 'under', 'over', 'below', 'above', 'less',
@@ -142,14 +143,15 @@ export const TOOL_DEFINITIONS = [
     },
   },
   {
+    // NOTE: This tool is executed ONLY by the server's confirmation flow
+    // (see services/gemini.js). It is NOT exposed to the LLM.
     name: 'place_order',
-    description: 'Place the order for the items currently in the signed-in user\'s bag. You MUST ask the user for confirmation before calling this tool.',
+    description: "Place the order for the items in the signed-in user's bag. Server-side only.",
     parameters: {
       type: 'object',
       properties: {
         coupon_code: { type: 'string', description: 'Optional coupon code to apply.' },
       },
-      required: [], // <--- ADD THIS
     },
   },
 ];
@@ -301,7 +303,6 @@ export async function getCartSnapshot(userId) {
     total: items.filter((i) => i.available).reduce((s, i) => s + i.subtotal, 0),
   };
 }
-
 
 async function searchProducts(args) {
   let categoryId = null;
@@ -532,7 +533,6 @@ async function clearCart(userId) {
   return { ok: true, action: 'cart_updated', removed_lines: (data || []).length };
 }
 
-
 async function getWishlist(userId) {
   const { data, error } = await admin
     .from(WISHLIST_TABLE)
@@ -605,6 +605,69 @@ async function removeFromWishlist(args, userId) {
   return { ok: true, action: 'wishlist_updated', removed: true };
 }
 
+/**
+ * Places an order from the user's current bag via the Supabase RPC.
+ * Always returns an object (never throws) so the caller can show a clean message.
+ */
+export async function placeOrder(args, userId) {
+  if (!userId) return { error: 'AUTH_REQUIRED', message: 'Please sign in to place an order.' };
+
+  let timer;
+  try {
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('ORDER_TIMEOUT')), ORDER_RPC_TIMEOUT_MS);
+    });
+
+    // Promise.resolve() converts the Supabase builder into a real Promise.
+    const rpc = Promise.resolve(
+      admin.rpc('create_order_from_cart', {
+        p_user_id: userId,
+        p_coupon_code: args?.coupon_code || null,
+      }),
+    );
+
+    const { data, error } = await Promise.race([rpc, timeout]);
+
+    if (error) {
+      console.error('[ai:place_order] failed:', error.code, error.message, error.details || '');
+      const m = String(error.message || '');
+      let msg = 'I could not place the order. Please open your bag and try the Place Order button.';
+      if (m.includes('CART_EMPTY')) msg = 'Your bag is empty.';
+      else if (m.includes('INSUFFICIENT_STOCK')) msg = 'Some items are out of stock. Please review your bag.';
+      else if (m.includes('COUPON_INVALID')) msg = 'The coupon code is invalid or expired.';
+      else if (m.includes('UNAVAILABLE')) msg = 'Some items in your bag are no longer available.';
+      return { error: 'ORDER_FAILED', message: msg };
+    }
+
+    // RPC may return a bare uuid, an array, or an object depending on how it was written.
+    let orderId = data;
+    if (Array.isArray(orderId)) orderId = orderId[0];
+    if (orderId && typeof orderId === 'object') {
+      orderId = orderId.id ?? orderId.order_id ?? Object.values(orderId)[0];
+    }
+
+    if (!orderId) {
+      console.error('[ai:place_order] RPC returned no order id:', JSON.stringify(data));
+      return {
+        error: 'ORDER_FAILED',
+        message: 'I could not confirm the order. Please check your orders before trying again.',
+      };
+    }
+
+    return { ok: true, action: 'order_placed', order_id: String(orderId) };
+  } catch (err) {
+    console.error('[ai:place_order] crashed:', err?.message);
+    if (err?.message === 'ORDER_TIMEOUT') {
+      return {
+        error: 'ORDER_FAILED',
+        message: 'The order is taking too long. Please check your orders before trying again.',
+      };
+    }
+    return { error: 'ORDER_FAILED', message: 'I could not place the order. Please try again.' };
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 export async function executeTool(name, args = {}, ctx = {}) {
   const userId = ctx.userId || null;
@@ -726,32 +789,8 @@ export async function executeTool(name, args = {}, ctx = {}) {
         return { order: data };
       }
 
-      case 'place_order': {
-        if (!userId) return { error: 'AUTH_REQUIRED' };
-
-        // Safety timeout for the database RPC (10 seconds)
-        const rpcPromise = admin.rpc('create_order_from_cart', {
-          p_user_id: userId,
-          p_coupon_code: args.coupon_code || null,
-        });
-        const timeoutPromise = new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('Database timeout')), 10000)
-        );
-
-        const { data: orderId, error } = await Promise.race([rpcPromise, timeoutPromise]);
-
-        if (error) {
-          console.error('[ai:place_order] failed:', error.message);
-          let msg = 'Could not place order.';
-          if (error.message.includes('CART_EMPTY')) msg = 'Your bag is empty.';
-          if (error.message.includes('INSUFFICIENT_STOCK')) msg = 'Some items are out of stock. Please review your bag.';
-          if (error.message.includes('COUPON_INVALID')) msg = 'The coupon code is invalid or expired.';
-          if (error.message.includes('UNAVAILABLE')) msg = 'Some items in your bag are no longer available.';
-          return { error: 'ORDER_FAILED', message: msg };
-        }
-
-        return { ok: true, action: 'order_placed', order_id: orderId };
-      }
+      case 'place_order':
+        return await placeOrder(args, userId);
 
       default:
         return { error: 'UNKNOWN_TOOL' };
