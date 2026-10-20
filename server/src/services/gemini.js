@@ -11,9 +11,11 @@ const client = apiKey
   ? new OpenAI({ apiKey, baseURL: 'https://api.groq.com/openai/v1' })
   : null;
 
+// Llama-3.3 is much more stable on Groq for Tool Calling than gpt-oss-120b
 const MODEL_CANDIDATES = [
-  process.env.AI_MODEL || 'openai/gpt-oss-120b',
-  'llama-3.3-70b-versatile',
+  'llama-3.3-70b-versatile', 
+  'llama3-70b-8192',
+  'openai/gpt-oss-120b'
 ].filter((m, i, arr) => arr.indexOf(m) === i);
 
 const SYSTEM_INSTRUCTION = `You are MONO AI, the shopping assistant for MONO — a premium streetwear e-commerce brand.
@@ -31,7 +33,6 @@ Rules you must always follow:
 - Only call the 'place_order' tool if the user confirms (e.g., "Yes", "Place it").
 - Respond in the same language the user writes in.
 - When you show products, keep the text minimal (1–2 sentences) — the product cards already convey the details.`;
-
 
 function lowercaseTypes(schema) {
   if (!schema || typeof schema !== 'object') return schema;
@@ -59,7 +60,7 @@ const TOOLS = TOOL_DEFINITIONS.map((t) => ({
 
 function sanitizeHistory(history) {
   const cleaned = [];
-  for (const m of (history || []).slice(-12)) {
+  for (const m of (history || []).slice(-10)) {
     const role = m.role === 'assistant' ? 'assistant' : 'user';
     const text = String(m.content || '').trim();
     if (!text) continue;
@@ -99,6 +100,7 @@ async function callModel(model, messages, toolResults, userId) {
       tools: TOOLS,
       tool_choice: 'auto',
       temperature: 0.3,
+      max_tokens: 800, // Prevents runaway generation
     });
 
     const reply = completion.choices?.[0]?.message;
@@ -109,9 +111,10 @@ async function callModel(model, messages, toolResults, userId) {
 
     if (toolCalls.length === 0) break;
 
+    // Push assistant message with tool calls
     messages.push({
       role: 'assistant',
-      content: reply.content || null,
+      content: reply.content || null, // Must be null, not empty string
       tool_calls: toolCalls,
     });
 
@@ -139,12 +142,7 @@ async function callModel(model, messages, toolResults, userId) {
 
 export async function runChat({ message, history = [], userId }) {
   if (!client) {
-    console.error('[ai] client is null — GROQ_API_KEY missing at module load');
-    return {
-      message: 'AI assistant is temporarily unavailable. You can continue shopping normally.',
-      products: [],
-      actions: [],
-    };
+    return { message: 'AI assistant is temporarily unavailable.', products: [], actions: [] };
   }
 
   const baseMessages = [
@@ -167,7 +165,7 @@ export async function runChat({ message, history = [], userId }) {
 
       const actions = [];
       let orderId = null;
-
+      
       for (const tr of toolResults) {
         if (tr.output?.action) actions.push(tr.output.action);
         if (tr.output?.order_id) orderId = tr.output.order_id;
@@ -185,8 +183,8 @@ export async function runChat({ message, history = [], userId }) {
       const msg = err?.message || String(err);
       console.error(`[ai] ${model} failed: ${status ?? 'unknown'} ${msg}`);
 
-      const retryable = status === 429 || (typeof status === 'number' && status >= 500);
-      if (!retryable) throw err;
+      // Always try the next model if one fails, regardless of error type
+      // (Tool calling errors can be 400s on some models)
     }
   }
 
