@@ -143,13 +143,13 @@ export const TOOL_DEFINITIONS = [
   },
   {
     name: 'place_order',
-    description:
-      'Place the order for the items currently in the signed-in user\'s bag. You MUST ask the user for confirmation before calling this tool. Do not place the order immediately.',
+    description: 'Place the order for the items currently in the signed-in user\'s bag. You MUST ask the user for confirmation before calling this tool.',
     parameters: {
       type: 'object',
       properties: {
         coupon_code: { type: 'string', description: 'Optional coupon code to apply.' },
       },
+      required: [], // <--- ADD THIS
     },
   },
 ];
@@ -727,6 +727,8 @@ export async function executeTool(name, args = {}, ctx = {}) {
       }
 
       case 'place_order': {
+        if (!userId) return { error: 'AUTH_REQUIRED' };
+
         const { data: orderId, error } = await admin.rpc('create_order_from_cart', {
           p_user_id: userId,
           p_coupon_code: args.coupon_code || null,
@@ -734,11 +736,11 @@ export async function executeTool(name, args = {}, ctx = {}) {
 
         if (error) {
           console.error('[ai:place_order] failed:', error.message);
-          let msg = error.message;
-          if (msg.includes('CART_EMPTY')) msg = 'Your bag is empty.';
-          if (msg.includes('INSUFFICIENT_STOCK')) msg = 'Some items are out of stock or have insufficient stock. Please review your bag.';
-          if (msg.includes('COUPON_INVALID')) msg = 'The coupon code is invalid or expired.';
-          if (msg.includes('UNAVAILABLE')) msg = 'Some items in your bag are no longer available.';
+          let msg = 'Could not place order.';
+          if (error.message.includes('CART_EMPTY')) msg = 'Your bag is empty.';
+          if (error.message.includes('INSUFFICIENT_STOCK')) msg = 'Some items are out of stock. Please review your bag.';
+          if (error.message.includes('COUPON_INVALID')) msg = 'The coupon code is invalid or expired.';
+          if (error.message.includes('UNAVAILABLE')) msg = 'Some items in your bag are no longer available.';
           return { error: 'ORDER_FAILED', message: msg };
         }
 
