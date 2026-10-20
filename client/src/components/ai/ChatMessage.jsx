@@ -1,3 +1,5 @@
+import { Link } from 'react-router-dom';
+import { ArrowRight } from 'lucide-react';
 import { motion, useReducedMotion } from 'framer-motion';
 import { RotateCcw } from 'lucide-react';
 import ProductResultCard from './ProductResultCard';
@@ -28,9 +30,8 @@ export default function ChatMessage({ message, isLatest, busy, onSend, onRetry }
     <motion.div {...enter} className="flex flex-col gap-3">
       {content && (
         <div
-          className={`max-w-[92%] border-l pl-3 text-sm leading-relaxed whitespace-pre-line break-words ${
-            isError ? 'border-ink-muted text-ink-dim' : 'border-ink-white text-ink-text'
-          }`}
+          className={`max-w-[92%] border-l pl-3 text-sm leading-relaxed whitespace-pre-line break-words ${isError ? 'border-ink-muted text-ink-dim' : 'border-ink-white text-ink-text'
+            }`}
         >
           {content}
           {isError && onRetry && (
@@ -67,9 +68,9 @@ export default function ChatMessage({ message, isLatest, busy, onSend, onRetry }
           onRemove={
             isLatest
               ? (item) =>
-                  onSend(
-                    `Remove ${item.product_name}${item.size_name ? ` (size ${item.size_name})` : ''} from my bag`,
-                  )
+                onSend(
+                  `Remove ${item.product_name}${item.size_name ? ` (size ${item.size_name})` : ''} from my bag`,
+                )
               : undefined
           }
         />
@@ -87,6 +88,16 @@ export default function ChatMessage({ message, isLatest, busy, onSend, onRetry }
               {q.label}
             </button>
           ))}
+        </div>
+      )}
+      {message.orderId && (
+        <div className="mt-3 pt-3 border-t border-ink-line">
+          <Link
+            to={`/profile/orders/${message.orderId}`}
+            className="inline-flex items-center gap-2 px-4 py-2 bg-ink-white text-ink text-xs font-medium uppercase tracking-nav hover:bg-ink hover:text-ink-white transition-colors"
+          >
+            View Order <ArrowRight className="w-3 h-3" />
+          </Link>
         </div>
       )}
     </motion.div>

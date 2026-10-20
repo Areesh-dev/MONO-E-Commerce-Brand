@@ -1,18 +1,38 @@
 import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
-import { z } from 'zod';
 import { admin } from '../lib/supabase.js';
-import { runChat } from '../services/aiChat.js';
+import { validate } from '../middleware/validate.js';
+import { chatSchema } from '../schemas/ai.js';
+import { runChat } from '../services/gemini.js';
 
 const router = Router();
 
 const aiLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 12,
+  windowMs: 60_000,
+  max: 20,
   standardHeaders: true,
   legacyHeaders: false,
   handler: (_req, res) => res.status(429).json({ error: 'RATE_LIMITED' }),
 });
+
+async function optionalAuth(req, _res, next) {
+  try {
+    const header = req.headers.authorization || '';
+    const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+    if (!token) return next();
+
+    // Add a 3-second timeout to prevent hanging if Supabase is slow
+    const authPromise = admin.auth.getUser(token);
+    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Auth timeout')), 3000));
+
+    const { data } = await Promise.race([authPromise, timeoutPromise]);
+    if (data?.user) req.user = data.user;
+    next();
+  } catch (err) {
+    console.error('[auth] middleware error:', err.message);
+    next(); // Proceed as guest rather than crashing
+  }
+}
 
 const bodySchema = z.object({
   message: z.string().trim().min(1).max(1000),
@@ -54,25 +74,21 @@ function classifyAiError(err) {
   return [502, 'AI_UNAVAILABLE'];
 }
 
-router.post('/chat', aiLimiter, async (req, res) => {
-  const parsed = bodySchema.safeParse(req.body);
-  if (!parsed.success) {
-    return res.status(400).json({ error: 'INVALID_INPUT' });
-  }
-
-  const userId = await optionalUserId(req);
-
+router.post('/chat', aiLimiter, optionalAuth, validate(chatSchema), async (req, res) => {
   try {
     const result = await runChat({
-      message: parsed.data.message,
-      history: parsed.data.history,
-      userId,
+      message: req.body.message,
+      history: req.body.history,
+      userId: req.user?.id || null,
     });
-    return res.json(result);
+    res.json(result);
   } catch (err) {
-    const [status, code] = classifyAiError(err);
-    console.error('[ai] chat failed:', err?.status ?? 'network', err?.message);
-    return res.status(status).json({ error: code });
+    console.error('[ai] chat failed:', err?.status, err?.message);
+    // Return a proper JSON error instead of letting the server crash
+    if (err?.status === 429) {
+      return res.status(429).json({ error: 'AI_QUOTA_EXCEEDED' });
+    }
+    res.status(502).json({ error: 'AI_UNAVAILABLE' });
   }
 });
 

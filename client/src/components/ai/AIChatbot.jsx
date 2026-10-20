@@ -147,6 +147,7 @@ export default function AIChatbot() {
 
     try {
       const result = await sendChat({ message: text, history });
+
       setMessages((m) => [
         ...m,
         {
@@ -156,17 +157,20 @@ export default function AIChatbot() {
           products: result.products,
           cart: result.cart,
           quickReplies: result.quickReplies,
+          orderId: result.orderId, // <--- Add this
         },
       ]);
 
-      if (result.actions.includes('cart_updated')) {
+      const actions = result.actions || [];
+
+      // If cart changed OR order was placed, refresh the cart state
+      if (actions.includes('cart_updated') || actions.includes('order_placed')) {
         try {
           await refreshCart?.();
-        } catch {
-        }
+        } catch { }
       }
 
-      if (result.actions.includes('wishlist_updated')) {
+      if (actions.includes('wishlist_updated')) {
         window.dispatchEvent(new CustomEvent('wishlist:changed'));
       }
     } catch (err) {
@@ -175,7 +179,7 @@ export default function AIChatbot() {
         {
           id: newId(),
           role: 'assistant',
-          content: ERROR_COPY[err.code] || DEFAULT_ERROR,
+          content: ERROR_COPY[err.code] || "Something went wrong while processing your request. Please try again.",
           isError: true,
           retryText: err.code === 'AI_QUOTA_EXCEEDED' ? null : text,
         },
@@ -226,10 +230,10 @@ export default function AIChatbot() {
   const panelMotion = reduceMotion
     ? { initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0 } }
     : {
-        initial: { opacity: 0, y: 20 },
-        animate: { opacity: 1, y: 0 },
-        exit: { opacity: 0, y: 20 },
-      };
+      initial: { opacity: 0, y: 20 },
+      animate: { opacity: 1, y: 0 },
+      exit: { opacity: 0, y: 20 },
+    };
 
   return (
     <>
