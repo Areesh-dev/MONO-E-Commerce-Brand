@@ -85,5 +85,7 @@ app.use((err, _req, res, _next) => {
   res.status(500).json({ error: 'SERVER_ERROR' });
 });
 
+app.set('trust proxy', 1)
+
 const port = process.env.PORT || 5000;
 app.listen(port, () => console.log(`API listening on :${port}`));
