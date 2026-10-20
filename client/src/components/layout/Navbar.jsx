@@ -71,6 +71,7 @@ export default function Navbar() {
 
       <header className="sticky top-0 z-50 bg-ink border-b border-ink-line">
         <Container className="h-16 flex items-center justify-between gap-3 sm:gap-4">
+          {/* Desktop primary nav (lg+) */}
           <nav aria-label="Primary" className="hidden lg:flex items-center gap-8 flex-1">
             {navLinks.map((l) => (
               <PrefetchLink
@@ -86,11 +87,14 @@ export default function Navbar() {
             ))}
           </nav>
 
+          {/* Logo */}
           <div className="flex-1 lg:flex-none flex lg:justify-center">
             <Logo size="md" />
           </div>
 
+          {/* Right cluster */}
           <div className="flex items-center gap-3 sm:gap-4 flex-1 justify-end">
+            {/* Search — always visible */}
             <button
               type="button"
               onClick={() => setSearchOpen((s) => !s)}
@@ -102,6 +106,7 @@ export default function Navbar() {
               <Search className="w-[18px] h-[18px]" strokeWidth={1.5} />
             </button>
 
+            {/* Desktop only: Account */}
             <Link
               to={user ? '/profile' : '/login'}
               aria-label={user ? 'Account' : 'Sign in'}
@@ -110,6 +115,7 @@ export default function Navbar() {
               <User className="w-[18px] h-[18px]" strokeWidth={1.5} />
             </Link>
 
+            {/* Desktop only: Wishlist */}
             <Link
               to="/wishlist"
               aria-label={`Wishlist, ${wishlistCount} item${wishlistCount === 1 ? '' : 's'}`}
@@ -126,6 +132,7 @@ export default function Navbar() {
               )}
             </Link>
 
+            {/* Cart — always visible */}
             <Link
               to="/cart"
               aria-label={`Cart, ${cartCount} item${cartCount === 1 ? '' : 's'}`}
@@ -142,6 +149,7 @@ export default function Navbar() {
               )}
             </Link>
 
+            {/* Mobile/Tablet only: Profile (if signed in) or Login (if signed out) */}
             <Link
               to={user ? '/profile' : '/login'}
               aria-label={user ? 'Account' : 'Sign in'}
@@ -154,6 +162,7 @@ export default function Navbar() {
               )}
             </Link>
 
+            {/* Mobile/Tablet only: Menu */}
             <button
               type="button"
               onClick={() => setMobileOpen(true)}
@@ -166,6 +175,7 @@ export default function Navbar() {
           </div>
         </Container>
 
+        {/* Site search — expands below the header */}
         <AnimatePresence>
           {searchOpen && (
             <motion.div
@@ -205,6 +215,7 @@ export default function Navbar() {
         </AnimatePresence>
       </header>
 
+      {/* Mobile / Tablet menu */}
       <AnimatePresence>
         {mobileOpen && (
           <motion.div

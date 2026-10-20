@@ -165,7 +165,6 @@ export async function runChat({ message, history = [], userId }) {
 
       const actions = [];
       let orderId = null;
-
       for (const tr of toolResults) {
         if (tr.output?.action) actions.push(tr.output.action);
         if (tr.output?.order_id) orderId = tr.output.order_id;
@@ -182,8 +181,6 @@ export async function runChat({ message, history = [], userId }) {
       const status = err?.status ?? err?.response?.status;
       const msg = err?.message || String(err);
       console.error(`[ai] ${model} failed: ${status ?? 'unknown'} ${msg}`);
-
-      // Fall through to try the next model no matter what error (400, 404, 500, etc.)
     }
   }
 
