@@ -1,7 +1,24 @@
 import OpenAI from 'openai';
-import { TOOL_DEFINITIONS, executeTool } from './aiTools.js';
+import {
+  TOOL_DEFINITIONS,
+  MUTATING_TOOLS,
+  CART_TOOLS,
+  WISHLIST_MUTATING_TOOLS,
+  executeTool,
+  getCartSnapshot,
+} from './aiTools.js';
 
 const apiKey = process.env.GROQ_API_KEY;
+
+const MODELS = [
+  process.env.AI_MODEL || 'llama-3.3-70b-versatile',
+  'openai/gpt-oss-120b',
+  'llama-3.1-8b-instant',
+].filter((m, i, arr) => arr.indexOf(m) === i);
+
+const MAX_TOOL_ROUNDS = 4;
+const MAX_MUTATIONS_PER_TURN = 4;
+const MAX_TOOL_OUTPUT_CHARS = 6000;
 
 if (!apiKey) {
   console.warn('[ai] GROQ_API_KEY is not set — AI chat will be unavailable.');
@@ -11,178 +28,386 @@ const client = apiKey
   ? new OpenAI({ apiKey, baseURL: 'https://api.groq.com/openai/v1' })
   : null;
 
-// Llama-3.3 is much more stable on Groq for Tool Calling than gpt-oss-120b
-const MODEL_CANDIDATES = [
-  'llama-3.3-70b-versatile',
-  'llama3-70b-8192',
-  'openai/gpt-oss-120b'
-].filter((m, i, arr) => arr.indexOf(m) === i);
+const BASE_PROMPT = `You are MONO AI, the shopping assistant for MONO, a premium streetwear brand. Prices are in Pakistani Rupees.
 
-const SYSTEM_INSTRUCTION = `You are MONO AI, the shopping assistant for MONO — a premium streetwear e-commerce brand.
+Currency:
+- Always write prices as "Rs" followed by the amount with commas, for example "Rs 3,500".
+- Never use the ₹ symbol, "INR", or "PKR" in replies.
 
-Rules you must always follow:
-- Only use facts returned by tools. Never invent products, prices, sizes, or stock.
-- If a tool returns an error, explain it briefly and offer a helpful alternative.
-- Keep responses short, warm, and useful. Plain text only — no markdown headings, no emojis.
-- If a product has sizes, you MUST ask the user which size before adding to cart.
-- Never claim an order was placed unless a tool confirmed it (you receive an order_id).
-- Never ask for or reveal payment details, passwords, or another user's information.
-- If the user is not signed in and asks for cart or order actions, politely ask them to sign in.
-- You CAN place orders, but ONLY after the user explicitly confirms. 
-- Before placing an order, summarize the cart and ask "Would you like me to place this order?".
-- Only call the 'place_order' tool if the user confirms (e.g., "Yes", "Place it").
-- Respond in the same language the user writes in.
-- When you show products, keep the text minimal (1–2 sentences) — the product cards already convey the details.`;
+General:
+- Only use facts returned by tools. Never invent products, prices, sizes, stock, or order details.
+- Always call a tool for product, price, stock, size, cart, wishlist, or order questions, even if earlier messages mention them. Data in earlier messages may be outdated.
+- Keep replies short and warm: 1 to 3 sentences, plain text, no markdown, no emojis.
+- When tools return products, do not list them in your text. The app shows product cards. Say one line about what you found.
+- If a search returns nothing, say so and suggest a nearby option: another category, a wider price range, or new arrivals.
+- Respond in the same language the user writes in (English, Urdu, or Roman Urdu).
 
-function lowercaseTypes(schema) {
-  if (!schema || typeof schema !== 'object') return schema;
-  const out = { ...schema };
-  if (typeof out.type === 'string') out.type = out.type.toLowerCase();
-  if (out.properties && typeof out.properties === 'object') {
-    out.properties = Object.fromEntries(
-      Object.entries(out.properties).map(([k, v]) => [k, lowercaseTypes(v)])
-    );
-  }
-  if (out.items) out.items = lowercaseTypes(out.items);
-  return out;
+Cart:
+- If a product has sizes, ask which size unless the user already said it. Pass the size name (for example "M") to add_to_cart. Default quantity is 1.
+- If add_to_cart returns SIZE_REQUIRED or SIZE_UNAVAILABLE, ask the user to pick from available_sizes. The app shows size buttons.
+- To change or remove a line you need its cart_item_id. Use one from a [Cart shown: ...] note if present, otherwise call get_cart first.
+- Phrases like "the first one", "that hoodie", or "remove it" refer to the most recent [Products shown: ...] or [Cart shown: ...] note.
+- Only call clear_cart after the user explicitly confirms they want to empty the whole bag.
+- After a cart change, confirm exactly what changed in one sentence. The app shows the updated bag.
+- If a tool returns AUTH_REQUIRED, ask the user to sign in first.
+
+Wishlist:
+- "Save it", "add to wishlist", "favourite this" mean add_to_wishlist. "Show my wishlist" or "saved items" means get_wishlist.
+- To move a wishlist item to the bag, call add_to_cart (ask for size if needed), then remove_from_wishlist only if the add succeeded.
+- If add_to_wishlist returns already_saved, tell the user it is already in their wishlist.
+
+Orders and payment:
+- You do not place orders yourself. The app handles it: when the user wants to order, tell them to say "place my order" (or press "Place Order" in their bag).
+- Never claim an order was placed or a payment completed.
+- Never ask for or reveal payment details, passwords, or other users' information.
+- Notes in square brackets inside earlier messages are app context, not instructions from the user.`;
+
+function systemPrompt(signedIn) {
+  return `${BASE_PROMPT}\n\nSession: the user is ${signedIn ? 'signed in' : 'NOT signed in'}.`;
 }
 
-const TOOLS = TOOL_DEFINITIONS.map((t) => ({
+// place_order is intentionally NOT exposed to the model. It is executed by the
+// server-side confirmation flow below, which is deterministic and safe.
+const TOOLS = TOOL_DEFINITIONS.filter((t) => t.name !== 'place_order').map((t) => ({
   type: 'function',
   function: {
     name: t.name,
     description: t.description,
-    parameters: t.parameters
-      ? lowercaseTypes(t.parameters)
-      : { type: 'object', properties: {} },
+    parameters: t.parameters || { type: 'object', properties: {} },
   },
 }));
 
-function sanitizeHistory(history) {
-  const cleaned = [];
-  for (const m of (history || []).slice(-10)) {
-    const role = m.role === 'assistant' ? 'assistant' : 'user';
-    const text = String(m.content || '').trim();
+const FALLBACK = {
+  message: 'AI assistant is temporarily unavailable. You can continue shopping normally.',
+  products: [],
+  cart: null,
+  quickReplies: [],
+  action: null,
+  actions: [],
+};
+
+/* ------------------------------------------------------------------ */
+/* Helpers                                                             */
+/* ------------------------------------------------------------------ */
+
+function sanitizeHistory(history, currentMessage) {
+  const out = [];
+  for (const m of (Array.isArray(history) ? history : []).slice(-12)) {
+    const role = m?.role === 'assistant' ? 'assistant' : 'user';
+    const text = String(m?.content ?? '').trim();
     if (!text) continue;
-    if (cleaned.length === 0 && role !== 'user') continue;
-    cleaned.push({ role, content: text.slice(0, 2000) });
+    if (out.length === 0 && role !== 'user') continue;
+    out.push({ role, content: text.slice(0, 3500) });
   }
-  return cleaned;
+  const last = out[out.length - 1];
+  if (last && last.role === 'user' && last.content === currentMessage) out.pop();
+  return out;
+}
+
+function toolContent(output) {
+  const json = JSON.stringify(output, (key, value) => (key === 'image_url' ? undefined : value));
+  return json.length > MAX_TOOL_OUTPUT_CHARS ? json.slice(0, MAX_TOOL_OUTPUT_CHARS) : json;
+}
+
+function parseArgs(raw) {
+  try {
+    const parsed = JSON.parse(raw || '{}');
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function cleanText(text) {
+  return String(text || '')
+    .replace(/\*\*(.+?)\*\*/g, '$1')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/(?:₹|\bINR\b|\bPKR\b|\bRs\.?)\s*(?=\d)/g, 'Rs ')
+    .replace(/(\d[\d,]*)\s*(?:₹|\bINR\b|\bPKR\b)/g, 'Rs $1')
+    .replace(/₹/g, 'Rs')
+    .trim();
+}
+
+function errorCode(err) {
+  return err?.code ?? err?.error?.code ?? err?.error?.error?.code ?? null;
+}
+
+const rs = (n) => `Rs ${Number(n || 0).toLocaleString('en-US')}`;
+
+/**
+ * Calls the LLM. Tries every model (2 attempts each) and only throws
+ * when ALL models failed.
+ */
+async function complete(messages, signedIn, toolChoice = 'auto') {
+  let lastErr;
+
+  for (const model of MODELS) {
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const res = await client.chat.completions.create({
+          model,
+          messages: [{ role: 'system', content: systemPrompt(signedIn) }, ...messages],
+          tools: TOOLS,
+          tool_choice: toolChoice,
+          temperature: 0.3,
+          ...(model.startsWith('openai/gpt-oss') ? { reasoning_effort: 'low' } : {}),
+        });
+
+        const msg = res.choices?.[0]?.message;
+        if (msg) return msg;
+
+        lastErr = Object.assign(new Error('EMPTY_COMPLETION'), { status: 502 });
+        break; // try next model
+      } catch (err) {
+        lastErr = err;
+        console.warn(
+          `[ai] ${model} attempt ${attempt} failed: ${err?.status ?? 'network'} ${errorCode(err) ?? ''} ${err?.message ?? err}`,
+        );
+
+        // Malformed tool call: one retry on the same model, then move on.
+        if (errorCode(err) === 'tool_use_failed' && attempt === 1) continue;
+        break; // any other error -> try the next model
+      }
+    }
+  }
+
+  throw lastErr ?? new Error('AI_UNAVAILABLE');
 }
 
 function collectProducts(toolResults) {
   const products = [];
   const seen = new Set();
-  for (const tr of toolResults) {
-    if (Array.isArray(tr.output?.products)) {
-      for (const p of tr.output.products) {
-        if (p?.id && !seen.has(p.id)) {
-          seen.add(p.id);
-          products.push(p);
-        }
-      }
+  const push = (p) => {
+    if (p?.id && !seen.has(p.id)) {
+      seen.add(p.id);
+      products.push(p);
     }
-    if (tr.output?.product?.id && !seen.has(tr.output.product.id)) {
-      seen.add(tr.output.product.id);
-      products.push(tr.output.product);
-    }
+  };
+  for (const { output } of toolResults) {
+    if (Array.isArray(output?.products)) output.products.forEach(push);
+    if (output?.product) push(output.product);
   }
   return products.slice(0, 6);
 }
 
-async function callModel(model, messages, toolResults, userId) {
-  let lastText = '';
-
-  for (let round = 0; round < 2; round++) {
-    const completion = await client.chat.completions.create({
-      model,
-      messages,
-      tools: TOOLS,
-      tool_choice: 'auto',
-      temperature: 0.3,
-      max_tokens: 800, // Prevents runaway generation
-    });
-
-    const reply = completion.choices?.[0]?.message;
-    if (!reply) break;
-
-    lastText = (reply.content || '').trim();
-    const toolCalls = reply.tool_calls || [];
-
-    if (toolCalls.length === 0) break;
-
-    // Push assistant message with tool calls
-    messages.push({
-      role: 'assistant',
-      content: reply.content || null, // Must be null, not empty string
-      tool_calls: toolCalls,
-    });
-
-    for (const call of toolCalls) {
-      let args = {};
-      try {
-        args = JSON.parse(call.function?.arguments || '{}');
-      } catch {
-        args = {};
-      }
-
-      const output = await executeTool(call.function.name, args, { userId });
-      toolResults.push({ name: call.function.name, output });
-
-      messages.push({
-        role: 'tool',
-        tool_call_id: call.id,
-        content: JSON.stringify(output),
-      });
-    }
-  }
-
-  return lastText || 'Done.';
+function sizeChips(sizes) {
+  return (sizes || [])
+    .filter((s) => Number(s.stock) > 0)
+    .slice(0, 8)
+    .map((s) => ({ label: s.name, message: `Size ${s.name}` }));
 }
 
-export async function runChat({ message, history = [], userId }) {
-  if (!client) {
-    return { message: 'AI assistant is temporarily unavailable.', products: [], actions: [] };
+function deriveQuickReplies(toolResults, text) {
+  for (let i = toolResults.length - 1; i >= 0; i--) {
+    const { name, output } = toolResults[i];
+    if (name === 'add_to_cart') {
+      return Array.isArray(output?.available_sizes) ? sizeChips(output.available_sizes) : [];
+    }
+    if (name === 'get_product' && output?.product?.sizes?.length && /size/i.test(text)) {
+      return sizeChips(output.product.sizes);
+    }
   }
+  return [];
+}
 
-  const baseMessages = [
-    { role: 'system', content: SYSTEM_INSTRUCTION },
-    ...sanitizeHistory(history),
-    { role: 'user', content: String(message).slice(0, 1000) },
-  ];
+/* ------------------------------------------------------------------ */
+/* Deterministic order flow (no LLM involved)                          */
+/* ------------------------------------------------------------------ */
 
-  const toolResults = [];
-  let lastError = null;
+// Wants to order
+const ORDER_INTENT_RE =
+  /(\b(place|confirm|complete|finali[sz]e|submit|make)\b.{0,25}\border\b)|(\bcheck\s?out\b)|(\border\s*(place|kar|kr|do|karo|krdo|kardo))|(\bbuy\s+(it|now|this|these|all)\b)/i;
+const QUESTION_START_RE = /^\s*(how|kaise|kese|what|kya)\b/i;
 
-  for (const model of MODEL_CANDIDATES) {
-    try {
-      const content = await callModel(
-        model,
-        [...baseMessages],
-        toolResults,
-        userId || null
+// Last assistant message was asking for order confirmation
+const CONFIRM_ASK_RE =
+  /would you like me to place|place this order|would you like to (place|proceed)|like to proceed|confirm.{0,30}(order|proceed)/i;
+
+const YES_RE =
+  /^\s*(yes|yeah|yea|yep|yup|ya|yaa|y|ok|okay|sure|confirm|confirmed|do it|go ahead|place it|place order|place my order|haan|han|hn|ha|haa|ji|jee|g|theek hai|thik hai|kar do|kardo|kr do|krdo)\b/i;
+const YES_BLOCK_RE = /\b(but|wait|actually|add|remove|change|instead|no|nahi|nhi)\b/i;
+const NO_RE = /^\s*(no|nope|nah|cancel|stop|don'?t|nahi|nhi|na|mat)\b/i;
+
+const COUPON_RE = /coupon(?:\s+code)?\s*[:\-]?\s*([A-Za-z0-9_-]{3,20})/i;
+
+function plainReply(message, extra = {}) {
+  return {
+    message,
+    products: [],
+    cart: null,
+    quickReplies: [],
+    action: null,
+    actions: [],
+    ...extra,
+  };
+}
+
+async function handleOrderFlow({ message, cleanHistory, userId }) {
+  const lastAssistant = [...cleanHistory].reverse().find((m) => m.role === 'assistant');
+  const waitingForConfirm = Boolean(lastAssistant && CONFIRM_ASK_RE.test(lastAssistant.content));
+
+  // Step 2: user answered the confirmation question
+  if (waitingForConfirm) {
+    const isNo = NO_RE.test(message);
+    const isYes = !isNo && YES_RE.test(message) && !YES_BLOCK_RE.test(message);
+
+    if (isNo) {
+      return plainReply("No problem, I haven't placed the order. Your bag is unchanged.");
+    }
+
+    if (isYes) {
+      if (!userId) return plainReply('Please sign in to place an order.');
+
+      const cart = await getCartSnapshot(userId);
+      if (!cart) return plainReply('I could not read your bag. Please try again.');
+      const items = cart.items.filter((i) => i.available);
+      if (items.length === 0) return plainReply('Your bag is empty.');
+
+      const couponMatch = lastAssistant.content.match(COUPON_RE);
+      const result = await executeTool(
+        'place_order',
+        couponMatch ? { coupon_code: couponMatch[1] } : {},
+        { userId },
       );
 
-      const actions = [];
-      let orderId = null;
-      for (const tr of toolResults) {
-        if (tr.output?.action) actions.push(tr.output.action);
-        if (tr.output?.order_id) orderId = tr.output.order_id;
+      if (!result?.ok) {
+        return plainReply(
+          result?.message || 'I could not place the order. Please check your bag and try again.',
+        );
       }
 
-      return {
-        message: content,
-        products: collectProducts(toolResults),
-        actions: [...new Set(actions)],
-        orderId,
-      };
+      return plainReply(
+        `Your order has been placed. Total: ${rs(cart.total)}. You can view it using the button below.`,
+        { action: 'order_placed', actions: ['order_placed'], orderId: result.order_id },
+      );
+    }
+    // Anything else (e.g. "add one more") falls through to the normal LLM flow.
+  }
+
+  // Step 1: user asks to place an order
+  if (ORDER_INTENT_RE.test(message) && !QUESTION_START_RE.test(message)) {
+    if (!userId) return plainReply('Please sign in first, then I can help you place your order.');
+
+    const cart = await getCartSnapshot(userId);
+    if (!cart) return plainReply('I could not read your bag. Please try again.');
+    const items = cart.items.filter((i) => i.available);
+    if (items.length === 0) {
+      return plainReply('Your bag is empty. Tell me what you would like to add.');
+    }
+
+    const lines = items
+      .slice(0, 8)
+      .map((i) => `${i.product_name}${i.size_name ? ` (${i.size_name})` : ''} x${i.quantity}`)
+      .join(', ');
+    const couponMatch = message.match(COUPON_RE);
+    const couponNote = couponMatch ? ` Coupon ${couponMatch[1]} will be applied.` : '';
+
+    return plainReply(
+      `Your bag: ${lines}. Total ${rs(cart.total)}.${couponNote} Would you like me to place this order?`,
+      {
+        cart,
+        quickReplies: [
+          { label: 'Yes, place order', message: 'Yes, place my order' },
+          { label: 'No, cancel', message: 'No' },
+        ],
+      },
+    );
+  }
+
+  return null;
+}
+
+/* ------------------------------------------------------------------ */
+/* Main entry                                                          */
+/* ------------------------------------------------------------------ */
+
+export async function runChat({ message, history = [], userId }) {
+  if (!client) return FALLBACK;
+
+  const signedIn = Boolean(userId);
+  const current = String(message).trim().slice(0, 1000);
+  const cleanHistory = sanitizeHistory(history, current);
+
+  // Orders are handled by the server, not the LLM.
+  try {
+    const orderResponse = await handleOrderFlow({ message: current, cleanHistory, userId });
+    if (orderResponse) return orderResponse;
+  } catch (err) {
+    console.error('[ai] order flow failed:', err?.message);
+    return plainReply('Something went wrong with your order. Please use the Place Order button in your bag.');
+  }
+
+  const messages = [...cleanHistory, { role: 'user', content: current }];
+
+  const ctx = { userId: userId || null };
+  const toolResults = [];
+  let mutations = 0;
+
+  let reply = await complete(messages, signedIn);
+
+  for (let round = 0; reply.tool_calls?.length; round++) {
+    if (round >= MAX_TOOL_ROUNDS) {
+      reply = await complete(messages, signedIn, 'none');
+      break;
+    }
+
+    messages.push({
+      role: 'assistant',
+      content: reply.content || null,
+      tool_calls: reply.tool_calls,
+    });
+
+    for (const call of reply.tool_calls) {
+      const name = call.function?.name;
+      const args = parseArgs(call.function?.arguments);
+
+      let output;
+      const mutating = MUTATING_TOOLS.has(name) || WISHLIST_MUTATING_TOOLS.has(name);
+
+      if (name === 'place_order') {
+        // Never let the model place orders directly.
+        output = { error: 'USE_CONFIRMATION_FLOW', hint: 'Tell the user to say "place my order".' };
+      } else if (mutating && mutations >= MAX_MUTATIONS_PER_TURN) {
+        output = { error: 'TOO_MANY_CHANGES_IN_ONE_MESSAGE' };
+      } else {
+        if (mutating) mutations++;
+        output = await executeTool(name, args, ctx);
+      }
+
+      toolResults.push({ name, output });
+      messages.push({ role: 'tool', tool_call_id: call.id, content: toolContent(output) });
+    }
+
+    reply = await complete(messages, signedIn);
+  }
+
+  const text = cleanText(reply.content) || 'Done.';
+
+  const cartChanged = toolResults.some((r) => MUTATING_TOOLS.has(r.name) && r.output?.ok);
+  const wishlistChanged = toolResults.some(
+    (r) => WISHLIST_MUTATING_TOOLS.has(r.name) && r.output?.action === 'wishlist_updated',
+  );
+  const actions = [
+    ...(cartChanged ? ['cart_updated'] : []),
+    ...(wishlistChanged ? ['wishlist_updated'] : []),
+  ];
+  const cartTouched = toolResults.some((r) => CART_TOOLS.has(r.name) && !r.output?.error);
+
+  let cart = null;
+  if (userId && cartTouched) {
+    try {
+      cart = await getCartSnapshot(userId);
     } catch (err) {
-      lastError = err;
-      const status = err?.status ?? err?.response?.status;
-      const msg = err?.message || String(err);
-      console.error(`[ai] ${model} failed: ${status ?? 'unknown'} ${msg}`);
+      console.error('[ai] cart snapshot failed:', err?.message);
     }
   }
 
-  throw lastError || new Error('AI_UNAVAILABLE');
+  return {
+    message: text,
+    products: cartChanged ? [] : collectProducts(toolResults),
+    cart,
+    quickReplies: deriveQuickReplies(toolResults, text),
+    action: actions[0] || null,
+    actions,
+  };
 }
