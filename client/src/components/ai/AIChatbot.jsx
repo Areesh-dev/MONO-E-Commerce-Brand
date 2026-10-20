@@ -15,7 +15,8 @@ const WELCOME_ID = 'welcome';
 const WELCOME = {
   id: WELCOME_ID,
   role: 'assistant',
-  content: "Hi, I'm MONO AI. I can find pieces for you, check sizes and stock, and add or remove things from your bag.",
+  content:
+    "Hi, I'm MONO AI. I can find pieces for you, check sizes and stock, and add or remove things from your bag.",
 };
 
 const SUGGESTIONS_PUBLIC = [
@@ -31,13 +32,14 @@ const SUGGESTIONS_SIGNED_IN = [
 const SUGGESTIONS_SIGNED_OUT = [{ label: 'FAQs', message: 'Show me the FAQs' }];
 
 const ERROR_COPY = {
-  AI_QUOTA_EXCEEDED: "Today's free AI quota is used up. The assistant will be back tomorrow; shopping works as usual.",
+  AI_QUOTA_EXCEEDED:
+    "Today's free AI quota is used up. The assistant will be back tomorrow; shopping works as usual.",
   AI_BUSY: 'The assistant is overloaded right now. Try again in a few seconds.',
+  AI_UNAVAILABLE: 'The assistant could not answer that. Please try again in a moment.',
   RATE_LIMITED: 'You are sending messages too quickly. Wait a moment, then try again.',
   AI_TIMEOUT: 'That took too long to answer. Try again.',
   NETWORK_ERROR: "Can't reach the server. Check your connection and try again.",
 };
-const DEFAULT_ERROR = 'The assistant is unavailable right now. You can keep shopping normally.';
 
 const newId = () =>
   typeof crypto !== 'undefined' && crypto.randomUUID
@@ -60,9 +62,7 @@ function buildHistory(messages) {
     .map((m) => {
       let content = m.content;
       if (m.role === 'assistant' && m.products?.length) {
-        const list = m.products
-          .map((p, i) => `${i + 1}. ${p.name} (id: ${p.id})`)
-          .join('; ');
+        const list = m.products.map((p, i) => `${i + 1}. ${p.name} (id: ${p.id})`).join('; ');
         content += `\n[Products shown: ${list}]`;
       }
       if (m.role === 'assistant' && m.cart?.items?.length) {
@@ -105,6 +105,7 @@ export default function AIChatbot() {
     try {
       sessionStorage.setItem(STORAGE_KEY, JSON.stringify(messages.slice(-MAX_STORED)));
     } catch {
+      /* storage full or unavailable */
     }
   }, [messages]);
 
@@ -157,17 +158,19 @@ export default function AIChatbot() {
           products: result.products,
           cart: result.cart,
           quickReplies: result.quickReplies,
-          orderId: result.orderId, // <--- Add this
+          orderId: result.orderId,
         },
       ]);
 
       const actions = result.actions || [];
 
-      // If cart changed OR order was placed, refresh the cart state
+      // Refresh the bag when it changed or an order was placed
       if (actions.includes('cart_updated') || actions.includes('order_placed')) {
         try {
           await refreshCart?.();
-        } catch { }
+        } catch {
+          /* ignore */
+        }
       }
 
       if (actions.includes('wishlist_updated')) {
@@ -179,9 +182,11 @@ export default function AIChatbot() {
         {
           id: newId(),
           role: 'assistant',
-          content: ERROR_COPY[err.code] || "Something went wrong while processing your request. Please try again.",
+          content:
+            ERROR_COPY[err?.code] ||
+            'Something went wrong while processing your request. Please try again.',
           isError: true,
-          retryText: err.code === 'AI_QUOTA_EXCEEDED' ? null : text,
+          retryText: err?.code === 'AI_QUOTA_EXCEEDED' ? null : text,
         },
       ]);
     } finally {
@@ -230,10 +235,10 @@ export default function AIChatbot() {
   const panelMotion = reduceMotion
     ? { initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0 } }
     : {
-      initial: { opacity: 0, y: 20 },
-      animate: { opacity: 1, y: 0 },
-      exit: { opacity: 0, y: 20 },
-    };
+        initial: { opacity: 0, y: 20 },
+        animate: { opacity: 1, y: 0 },
+        exit: { opacity: 0, y: 20 },
+      };
 
   return (
     <>
@@ -317,7 +322,10 @@ export default function AIChatbot() {
               )}
 
               {loading && (
-                <div className="flex items-center gap-1.5 border-l border-ink-line py-1 pl-3" aria-label="MONO AI is typing">
+                <div
+                  className="flex items-center gap-1.5 border-l border-ink-line py-1 pl-3"
+                  aria-label="MONO AI is typing"
+                >
                   {[0, 1, 2].map((i) => (
                     <motion.span
                       key={i}
