@@ -179,7 +179,7 @@ export default function AIChatbot() {
         {
           id: newId(),
           role: 'assistant',
-          content: ERROR_COPY[err.code] || DEFAULT_ERROR,
+          content: ERROR_COPY[err.code] || "Something went wrong while processing your request. Please try again.",
           isError: true,
           retryText: err.code === 'AI_QUOTA_EXCEEDED' ? null : text,
         },
