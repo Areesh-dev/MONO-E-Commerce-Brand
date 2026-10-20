@@ -7,6 +7,8 @@ import { runChat } from '../services/gemini.js';
 
 const router = Router();
 
+// NOTE: if your backend is behind a proxy (Render/Railway/Vercel), also add
+// `app.set('trust proxy', 1)` in your main server file.
 const aiLimiter = rateLimit({
   windowMs: 60_000,
   max: 20,
@@ -16,50 +18,24 @@ const aiLimiter = rateLimit({
 });
 
 async function optionalAuth(req, _res, next) {
+  let timer;
   try {
     const header = req.headers.authorization || '';
-    const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+    const token = header.startsWith('Bearer ') ? header.slice(7).trim() : null;
     if (!token) return next();
 
-    // Add a 3-second timeout to prevent hanging if Supabase is slow
-    const authPromise = admin.auth.getUser(token);
-    const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Auth timeout')), 3000));
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error('Auth timeout')), 3000);
+    });
 
-    const { data } = await Promise.race([authPromise, timeoutPromise]);
+    const { data } = await Promise.race([admin.auth.getUser(token), timeout]);
     if (data?.user) req.user = data.user;
-    next();
   } catch (err) {
-    console.error('[auth] middleware error:', err.message);
-    next(); // Proceed as guest rather than crashing
+    console.error('[auth] optionalAuth error:', err.message);
+  } finally {
+    clearTimeout(timer);
   }
-}
-
-const bodySchema = z.object({
-  message: z.string().trim().min(1).max(1000),
-  history: z
-    .array(
-      z.object({
-        role: z.enum(['user', 'assistant']),
-        content: z.string().max(4000),
-      }),
-    )
-    .max(20)
-    .optional()
-    .default([]),
-});
-
-async function optionalUserId(req) {
-  const header = req.headers.authorization || '';
-  if (!header.startsWith('Bearer ')) return null;
-  const token = header.slice(7).trim();
-  if (!token) return null;
-  try {
-    const { data, error } = await admin.auth.getUser(token);
-    if (error || !data?.user) return null;
-    return data.user.id;
-  } catch {
-    return null;
-  }
+  next(); // continue as guest if anything failed
 }
 
 function classifyAiError(err) {
@@ -84,11 +60,8 @@ router.post('/chat', aiLimiter, optionalAuth, validate(chatSchema), async (req, 
     res.json(result);
   } catch (err) {
     console.error('[ai] chat failed:', err?.status, err?.message);
-    // Return a proper JSON error instead of letting the server crash
-    if (err?.status === 429) {
-      return res.status(429).json({ error: 'AI_QUOTA_EXCEEDED' });
-    }
-    res.status(502).json({ error: 'AI_UNAVAILABLE' });
+    const [status, code] = classifyAiError(err);
+    res.status(status).json({ error: code });
   }
 });
 
